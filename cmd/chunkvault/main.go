@@ -29,6 +29,8 @@ func main() {
 		err = backup(os.Args[2:])
 	case "restore":
 		err = restore(os.Args[2:])
+	case "bench":
+		err = bench(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -57,7 +59,8 @@ func backup(args []string) error {
 	}
 	defer f.Close()
 
-	var ck chunker.Chunker = chunker.NewFixed(f, chunkSize)
+	// var ck chunker.Chunker = chunker.NewFixed(f, chunkSize)
+	ck, err := chunker.NewFastCDC(f, chunker.DefaultParams)
 	ider := crypto.SHA256IDer{}
 
 	var ids []types.ChunkID
