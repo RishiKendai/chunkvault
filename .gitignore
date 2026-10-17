@@ -36,4 +36,4 @@ go.work.sum
 data/
 cv-repo/
 [0-9]*.md
-chunkvault
+/chunkvault
