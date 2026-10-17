@@ -2,7 +2,8 @@ BIN    := chunkvault
 REPO   ?= ./cv-repo
 INPUT  ?= data/100mb.txt
 OUTPUT ?= data/restored-100mb.txt
-LIST   ?= $(REPO)/lists/$(notdir $(INPUT)).list
+# LIST   ?= $(REPO)/lists/$(notdir $(INPUT)).list
+SNAP ?= latest
 
 .PHONY: bin backup restore verify roundtrip clean bench
 
@@ -12,13 +13,19 @@ bin:
 backup: bin
 	./$(BIN) backup --repo $(REPO) $(INPUT)
 
+snapshots: bin
+	./$(BIN) snapshots --repo $(REPO)
+
 restore: bin
-	./$(BIN) restore --repo $(REPO) $(LIST) $(OUTPUT)
+	./$(BIN) restore --repo $(REPO) $(SNAP) $(OUTPUT)
 
-verify:
-	cmp $(INPUT) $(OUTPUT) && echo "IDENTICAL"
+check:
+	diff -r $(INPUT) $(OUTPUT) && echo "IDENTICAL"
 
-roundtrip: backup restore verify
+verify: bin
+	./$(BIN) verify --repo $(REPO) --read-data
+
+roundtrip: backup restore check
 
 clean:
 	rm -rf $(REPO) $(BIN)

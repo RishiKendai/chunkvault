@@ -1,34 +1,36 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"time"
 
+	"github.com/RishiKendai/chunkvault/internals/archiver"
 	"github.com/RishiKendai/chunkvault/internals/chunker"
 	"github.com/RishiKendai/chunkvault/internals/crypto"
+	"github.com/RishiKendai/chunkvault/internals/snapshot"
 	"github.com/RishiKendai/chunkvault/internals/store"
-	"github.com/RishiKendai/chunkvault/internals/types"
 )
 
-const chunkSize = 1 << 20
+const chunkSize = 1 << 20 // used by the fixed chunker in bench.go
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: chunkvault backup | restore ...")
+		fmt.Fprintln(os.Stderr, "usage: chunkvault backup|snapshots|restore|verify|bench ...")
 		os.Exit(2)
 	}
-
 	var err error
 	switch os.Args[1] {
 	case "backup":
 		err = backup(os.Args[2:])
+	case "snapshots":
+		err = snapshots(os.Args[2:])
 	case "restore":
 		err = restore(os.Args[2:])
+	case "verify":
+		err = verify(os.Args[2:])
 	case "bench":
 		err = bench(os.Args[2:])
 	default:
@@ -40,68 +42,75 @@ func main() {
 	}
 }
 
+func openRepo(repo string) (*archiver.Archiver, *snapshot.Catalog, error) {
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := store.NewLocal(absRepo)
+	if err != nil {
+		return nil, nil, err
+	}
+	cat, err := snapshot.NewCatalog(absRepo)
+	if err != nil {
+		return nil, nil, err
+	}
+	a := &archiver.Archiver{Store: st, IDer: crypto.SHA256IDer{}, Params: chunker.DefaultParams, Exclude: absRepo}
+	return a, cat, nil
+}
+
 func backup(args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	repo := fs.String("repo", "./cv-repo", "repository directory")
-	fs.Parse(args)
+	fs.Parse(args) // flags must come BEFORE the path
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: backup [--repo dir] <file>")
+		return fmt.Errorf("usage: backup [--repo dir] <file-or-dir>")
 	}
-	src := fs.Arg(0)
-
-	st, err := store.NewLocal(*repo)
+	abs, err := filepath.Abs(fs.Arg(0))
 	if err != nil {
 		return err
 	}
-	f, err := os.Open(src)
+	a, cat, err := openRepo(*repo)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	// var ck chunker.Chunker = chunker.NewFixed(f, chunkSize)
-	ck, err := chunker.NewFastCDC(f, chunker.DefaultParams)
-	ider := crypto.SHA256IDer{}
-
-	var ids []types.ChunkID
-	newChunks := 0
-
-	for {
-		c, err := ck.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-
-		id := ider.ID(c.Data)
-		has, err := st.Has(id)
-		if err != nil {
-			return err
-		}
-
-		if !has {
-			if err := st.Put(id, c.Data); err != nil {
-				return err
-			}
-			newChunks++
-		}
-		ids = append(ids, id)
-	}
-	listDir := filepath.Join(*repo, "lists")
-	if err := os.MkdirAll(listDir, 0o755); err != nil {
+	parent, err := cat.LatestForPath(abs)
+	if err != nil {
 		return err
 	}
-	listPath := filepath.Join(listDir, filepath.Base(src)+".list")
-	var sb strings.Builder
-	for _, id := range ids {
-		sb.WriteString(id.String() + "\n")
-	}
-	if err := os.WriteFile(listPath, []byte(sb.String()), 0o644); err != nil {
+	snap, err := a.Run(abs, parent)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("chunks: %d total, %d new, %d deduped\nlist: %s\n", len(ids), newChunks, len(ids)-newChunks, listPath)
+	if err := cat.Commit(snap); err != nil {
+		return err
+	}
+	s := snap.Stats
+	fmt.Printf("snapshot %s\n", snap.ID)
+	fmt.Printf("files: %d (%d unchanged, skipped)\n", s.Files, s.FilesReused)
+	fmt.Printf("read: %.1f MB | new chunks: %d (%.1f MB) | deduped chunks: %d\n",
+		float64(s.BytesRead)/1e6, s.NewChunks, float64(s.NewBytes)/1e6, s.DedupChunks)
+	return nil
+}
+
+func snapshots(args []string) error {
+	fs := flag.NewFlagSet("snapshots", flag.ExitOnError)
+	repo := fs.String("repo", "./cv-repo", "repository directory")
+	fs.Parse(args)
+	_, cat, err := openRepo(*repo)
+	if err != nil {
+		return err
+	}
+	all, err := cat.List()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%-26s %-19s %6s %9s %10s  %s\n", "ID", "TIME", "FILES", "NEWCHUNKS", "NEWBYTES", "PATH")
+	for _, s := range all {
+		fmt.Printf("%-26s %-19s %6d %9d %9.1fM  %s\n", s.ID,
+			time.Unix(0, s.CommittedAt).Local().Format("2006-01-02 15:04:05"),
+			s.Stats.Files, s.Stats.NewChunks, float64(s.Stats.NewBytes)/1e6, s.Paths[0])
+	}
 	return nil
 }
 
@@ -110,44 +119,54 @@ func restore(args []string) error {
 	repo := fs.String("repo", "./cv-repo", "repository directory")
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return fmt.Errorf("usage: restore [--repo dir] <list-file> <out-file>")
+		return fmt.Errorf("usage: restore [--repo dir] <snapshot-id|latest> <target-dir>")
 	}
+	a, cat, err := openRepo(*repo)
+	if err != nil {
+		return err
+	}
+	snap, err := cat.Get(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := a.Restore(snap.RootTree, fs.Arg(1)); err != nil {
+		return err
+	}
+	fmt.Printf("restored snapshot %s to %s\n", snap.ID, fs.Arg(1))
+	return nil
+}
 
-	st, err := store.NewLocal(*repo)
+func verify(args []string) error {
+	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	repo := fs.String("repo", "./cv-repo", "repository directory")
+	readData := fs.Bool("read-data", false, "read and re-hash every chunk")
+	fs.Parse(args)
+	a, cat, err := openRepo(*repo)
 	if err != nil {
 		return err
 	}
-	lf, err := os.Open(fs.Arg(0))
+	all, err := cat.List()
 	if err != nil {
 		return err
 	}
-	defer lf.Close()
-	out, err := os.Create(fs.Arg(1))
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	ider := crypto.SHA256IDer{}
-	sc := bufio.NewScanner(lf)
-	for sc.Scan() {
-		id, err := types.ParseChunkID(strings.TrimSpace(sc.Text()))
+	bad := 0
+	for _, s := range all {
+		problems, err := a.Verify(s.RootTree, *readData)
 		if err != nil {
 			return err
 		}
-		data, err := st.Get(id)
-		if err != nil {
-			return fmt.Errorf("chunk %s: %w", id, err)
+		if len(problems) == 0 {
+			fmt.Printf("OK    %s\n", s.ID)
+			continue
 		}
-		if ider.ID(data) != id {
-			return fmt.Errorf("chunk %s is corrupt", id)
-		}
-		if _, err := out.Write(data); err != nil {
-			return err
+		bad++
+		fmt.Printf("BAD   %s\n", s.ID)
+		for _, p := range problems {
+			fmt.Printf("      %s\n", p)
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return err
+	if bad > 0 {
+		return fmt.Errorf("%d snapshot(s) have problems", bad)
 	}
-	return out.Close()
+	return nil
 }
