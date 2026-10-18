@@ -5,7 +5,7 @@ OUTPUT ?= data/restored-100mb.txt
 # LIST   ?= $(REPO)/lists/$(notdir $(INPUT)).list
 SNAP ?= latest
 
-.PHONY: bin backup restore verify roundtrip clean bench
+.PHONY: bin backup restore verify roundtrip clean bench crash
 
 bin:
 	go build -o $(BIN) ./cmd/chunkvault
@@ -24,6 +24,9 @@ check:
 
 verify: bin
 	./$(BIN) verify --repo $(REPO) --read-data
+
+crash: bin
+	bash test/chaos/crash_loop.sh
 
 roundtrip: backup restore check
 

@@ -11,7 +11,9 @@ import (
 	"github.com/RishiKendai/chunkvault/internals/chunker"
 	"github.com/RishiKendai/chunkvault/internals/crypto"
 	"github.com/RishiKendai/chunkvault/internals/snapshot"
-	"github.com/RishiKendai/chunkvault/internals/store"
+
+	// "github.com/RishiKendai/chunkvault/internals/store"
+	"github.com/RishiKendai/chunkvault/internals/pack"
 )
 
 const chunkSize = 1 << 20 // used by the fixed chunker in bench.go
@@ -47,7 +49,8 @@ func openRepo(repo string) (*archiver.Archiver, *snapshot.Catalog, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := store.NewLocal(absRepo)
+	// st, err := store.NewLocal(absRepo)
+	st, err := pack.Open(absRepo)
 	if err != nil {
 		return nil, nil, err
 	}

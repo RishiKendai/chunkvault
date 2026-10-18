@@ -11,13 +11,15 @@ import (
 	"github.com/RishiKendai/chunkvault/internals/chunker"
 	"github.com/RishiKendai/chunkvault/internals/crypto"
 	"github.com/RishiKendai/chunkvault/internals/snapshot"
-	"github.com/RishiKendai/chunkvault/internals/store"
+
+	// "github.com/RishiKendai/chunkvault/internals/store"
+	"github.com/RishiKendai/chunkvault/internals/pack"
 )
 
 func newArch(t *testing.T) (*Archiver, *snapshot.Catalog) {
 	t.Helper()
 	repo := t.TempDir()
-	st, err := store.NewLocal(repo)
+	st, err := pack.Open(repo)
 	if err != nil {
 		t.Fatal(err)
 	}

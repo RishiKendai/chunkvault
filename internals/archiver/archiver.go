@@ -14,13 +14,21 @@ import (
 	"github.com/RishiKendai/chunkvault/internals/chunker"
 	"github.com/RishiKendai/chunkvault/internals/crypto"
 	"github.com/RishiKendai/chunkvault/internals/snapshot"
-	"github.com/RishiKendai/chunkvault/internals/store"
+
+	// "github.com/RishiKendai/chunkvault/internals/store"
 	"github.com/RishiKendai/chunkvault/internals/tree"
 	"github.com/RishiKendai/chunkvault/internals/types"
 )
 
+type BlobStore interface {
+	Has(types.ChunkID) (bool, error)
+	Put(types.ChunkID, []byte) error
+	Get(types.ChunkID) ([]byte, error)
+	Sync() error
+}
+
 type Archiver struct {
-	Store   *store.Local
+	Store   BlobStore
 	IDer    crypto.IDer
 	Params  chunker.Params
 	Exclude string // absolute path to skip (the repo itself, if it sits inside the source)
@@ -80,6 +88,9 @@ func (a *Archiver) Run(src string, parent *snapshot.Snapshot) (*snapshot.Snapsho
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := a.Store.Sync(); err != nil {
+		return nil, err
 	}
 
 	host, _ := os.Hostname()
